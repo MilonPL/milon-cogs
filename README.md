@@ -5,19 +5,19 @@ Currently includes GitHubLookup
 
 ## Installation
 
-1. Install required libraries:
-```bash
-pip install PyGithub
-```
-
-2. Add the repository to your bot:
+1. Add the repository to your bot:
 ```bash
 [p]repo add milon-cogs https://github.com/MilonPL/milon-cogs
 ```
 
-3. Install the cog:
+2. Install the cog:
 ```bash
-[p]cog install milon-cogs GitHubLookup
+[p]cog install milon-cogs githublookup
+```
+
+3. Load the cog:
+```bash
+[p]cog load githublookup
 ```
 
 ## Setup
