@@ -46,7 +46,7 @@ class SetupButton(discord.ui.View):
         self.stop()
 
 
-class GitHubIntegration(commands.Cog):
+class GitHubLookup(commands.Cog):
     """Look up GitHub files and PRs directly in Discord"""
 
     def __init__(self, bot: Red):
