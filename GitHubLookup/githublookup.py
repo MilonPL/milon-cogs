@@ -83,6 +83,12 @@ class GitHubLookup(commands.Cog):
             instance["client"].close()
         self.gh_instances.clear()
 
+    def strip_html_comments(text: str) -> str:
+        """Remove HTML comments from text."""
+        if not text:
+            return ""
+        return re.sub(r'<!--[\s\S]*?-->', '', text)
+
     @commands.group()
     @checks.admin()
     async def github(self, ctx: commands.Context):
@@ -337,15 +343,17 @@ class GitHubLookup(commands.Cog):
             try:
                 pr = repo.get_pull(int(pr_number))
 
+                cleaned_body = self.strip_html_comments(pr.body)
+
                 embed = discord.Embed(
                     title=f"#{pr.number} {pr.title}",
-                    description=pr.body[:1000] if pr.body else "No description provided",
-                    color=discord.Color.green() if pr.state == "open" else discord.Color.red(),
+                    description=cleaned_body[:1000] if pr.body else "No description provided",
+                    color=discord.Color.purple() if pr.merged else discord.Color.green() if pr.state == "open" else discord.Color.red(),
                     url=pr.html_url,
                     timestamp=pr.created_at
                 )
 
-                if pr.body and len(pr.body) > 1000:
+                if cleaned_body and len(cleaned_body) > 1000:
                     embed.description += "\n\n... (description truncated)"
 
                 embed.add_field(name="Status", value=pr.state.capitalize(), inline=True)
