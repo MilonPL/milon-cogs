@@ -89,6 +89,25 @@ class GitHubLookup(commands.Cog):
             return ""
         return re.sub(r'<!--[\s\S]*?-->', '', text)
 
+    def get_pr_status(self, pr) -> Tuple[str, discord.Color]:
+        """Get the status and color for a PR"""
+        if pr.merged:
+            return "Merged", discord.Color.purple()
+        elif pr.state == "open":
+            return "Open", discord.Color.green()
+        else:
+            return "Closed", discord.Color.red()
+
+    def get_issue_status_color(self, issue) -> discord.Color:
+        """Get the color for an issue based on its state and labels"""
+        if issue.state == "closed":
+            return discord.Color.red()
+        for label in issue.labels:
+            if label.name.lower() in ["bug", "critical", "urgent"]:
+                return discord.Color.orange()
+        return discord.Color.green()
+
+
     @commands.group()
     @checks.admin()
     async def github(self, ctx: commands.Context):
@@ -337,39 +356,77 @@ class GitHubLookup(commands.Cog):
                 )
                 await message.channel.send(embed=embed)
 
-        # Look for PR references [#1234]
         pr_matches = re.findall(r'\[#(\d+)]', message.content)
-        for pr_number in pr_matches:
+        for ref_number in pr_matches:
             try:
-                pr = repo.get_pull(int(pr_number))
+                # Try to get PR first
+                try:
+                    pr = repo.get_pull(int(ref_number))
+                    is_pr = True
+                except GithubException:
+                    # If PR not found, try to get issue
+                    issue = repo.get_issue(int(ref_number))
+                    is_pr = False
 
-                cleaned_body = self.strip_html_comments(pr.body)
+                if is_pr:
+                    # Handle Pull Request
+                    cleaned_body = self.strip_html_comments(pr.body)
+                    status, color = self.get_pr_status(pr)
 
-                embed = discord.Embed(
-                    title=f"#{pr.number} {pr.title}",
-                    description=cleaned_body[:1000] if pr.body else "No description provided",
-                    color=discord.Color.purple() if pr.merged else discord.Color.green() if pr.state == "open" else discord.Color.red(),
-                    url=pr.html_url,
-                    timestamp=pr.created_at
-                )
+                    embed = discord.Embed(
+                        title=f"PR #{pr.number} {pr.title}",
+                        description=cleaned_body[:1000] if pr.body else "No description provided",
+                        color=color,
+                        url=pr.html_url,
+                        timestamp=pr.created_at
+                    )
 
-                if cleaned_body and len(cleaned_body) > 1000:
-                    embed.description += "\n\n... (description truncated)"
+                    if cleaned_body and len(cleaned_body) > 1000:
+                        embed.description += "\n\n... (description truncated)"
 
-                embed.add_field(name="Status", value=pr.state.capitalize(), inline=True)
-                embed.add_field(name="Author", value=pr.user.login, inline=True)
-                embed.add_field(name="Comments", value=str(pr.comments), inline=True)
+                    embed.add_field(name="Status", value=status, inline=True)
+                    embed.add_field(name="Author", value=pr.user.login, inline=True)
+                    embed.add_field(name="Comments", value=str(pr.comments), inline=True)
 
-                if pr.merged:
-                    embed.add_field(name="Merged", value="Yes", inline=True)
-                    embed.add_field(name="Merged by", value=pr.merged_by.login, inline=True)
+                    if pr.merged:
+                        embed.add_field(name="Merged by", value=pr.merged_by.login, inline=True)
+                        embed.add_field(name="Merged at", value=pr.merged_at.strftime("%Y-%m-%d %H:%M UTC"),
+                                        inline=True)
+
+                else:
+                    # Handle Issue
+                    cleaned_body = self.strip_html_comments(issue.body)
+                    color = self.get_issue_status_color(issue)
+
+                    embed = discord.Embed(
+                        title=f"Issue #{issue.number} {issue.title}",
+                        description=cleaned_body[:1000] if issue.body else "No description provided",
+                        color=color,
+                        url=issue.html_url,
+                        timestamp=issue.created_at
+                    )
+
+                    if cleaned_body and len(cleaned_body) > 1000:
+                        embed.description += "\n\n... (description truncated)"
+
+                    embed.add_field(name="Status", value=issue.state.capitalize(), inline=True)
+                    embed.add_field(name="Author", value=issue.user.login, inline=True)
+                    embed.add_field(name="Comments", value=str(issue.comments), inline=True)
+
+                    if issue.labels:
+                        labels = ", ".join(label.name for label in issue.labels)
+                        embed.add_field(name="Labels", value=labels, inline=True)
+
+                    if issue.assignees:
+                        assignees = ", ".join(assignee.login for assignee in issue.assignees)
+                        embed.add_field(name="Assignees", value=assignees, inline=True)
 
                 await message.channel.send(embed=embed)
 
             except Exception as e:
                 embed = discord.Embed(
                     title="❌ Error",
-                    description=f"Error accessing PR #{pr_number}: {str(e)}",
+                    description=f"Error accessing #{ref_number}: {str(e)}",
                     color=discord.Color.red()
                 )
                 await message.channel.send(embed=embed)
