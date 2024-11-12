@@ -54,13 +54,15 @@ Once configured and enabled in a channel, users can:
 
 - Look up files using square brackets:
   ```
-  [filename.ext]     # Searches for filename.ext in any folder
-  [path/to/file.ext] # Looks up exact file path
+  [filename.ext]        # Searches for filename.ext in any folder
+  [path/to/file.ext]    # Looks up exact file path
+  [filename.ext:98]     # Looks up line 98 of the file
+  [filename.ext:10-15]  # Looks up lines 10-15 of the file
   ```
 
-- Check pull requests using pound sign:
+- Check pull requests and issues using pound sign:
   ```
-  [#1234] # Shows status and details of PR #1234
+  [#1234] # Shows status and details of PR or Issue #1234
   ```
 
 ## Examples

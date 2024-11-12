@@ -1,7 +1,7 @@
 import discord
 import re
 import asyncio
-from typing import List, Tuple
+from typing import List, Tuple, Union, Any
 from github import Github, Auth
 from github.GithubException import GithubException
 from github.ContentFile import ContentFile
@@ -83,13 +83,15 @@ class GitHubLookup(commands.Cog):
             instance["client"].close()
         self.gh_instances.clear()
 
-    def strip_html_comments(self, text: str) -> str:
+    @staticmethod
+    def strip_html_comments(text: str) -> str:
         """Remove HTML comments from text."""
         if not text:
             return ""
         return re.sub(r'<!--[\s\S]*?-->', '', text)
 
-    def get_pr_status(self, pr) -> Tuple[str, discord.Color]:
+    @staticmethod
+    def get_pr_status(pr) -> Tuple[str, discord.Color]:
         """Get the status and color for a PR"""
         if pr.merged:
             return "Merged", discord.Color.purple()
@@ -98,7 +100,8 @@ class GitHubLookup(commands.Cog):
         else:
             return "Closed", discord.Color.red()
 
-    def get_issue_status_color(self, issue) -> discord.Color:
+    @staticmethod
+    def get_issue_status_color(issue) -> discord.Color:
         """Get the color for an issue based on its state and labels"""
         if issue.state == "closed":
             return discord.Color.red()
@@ -106,6 +109,59 @@ class GitHubLookup(commands.Cog):
             if label.name.lower() in ["bug", "critical", "urgent"]:
                 return discord.Color.orange()
         return discord.Color.green()
+
+    @staticmethod
+    def extract_line_numbers(filename: str) -> Union[Tuple[Union[str, Any], int, int], Tuple[str, None, None]]:
+        """Extract line numbers from filename if present."""
+        match = re.match(r'(.*?):(\d+)(?:-(\d+))?$', filename)
+        if match:
+            file_path = match.group(1)
+            start_line = int(match.group(2))
+            end_line = int(match.group(3)) if match.group(3) else start_line
+            return file_path, start_line, end_line
+        return filename, None, None
+
+    @staticmethod
+    def get_line_range_url(url: str, start_line: int, end_line: int = None) -> str:
+        """Generate GitHub URL with line number references."""
+        if end_line and end_line != start_line:
+            return f"{url}#L{start_line}-L{end_line}"
+        return f"{url}#L{start_line}"
+
+    @staticmethod
+    def format_line_numbers(content: str, start_line: int = None, end_line: int = None) -> str:
+        """
+        Format content with line numbers.
+        If start_line and end_line are provided, only show that range.
+        Otherwise, show all lines with numbers.
+        """
+        lines = content.splitlines()
+
+        # If no line range specified, show all lines
+        if start_line is None:
+            start_line = 1
+            end_line = len(lines)
+        elif end_line is None:
+            end_line = start_line
+
+        # Validate line numbers
+        start_line = max(1, start_line)
+        end_line = min(len(lines), end_line)
+        if start_line > end_line:
+            start_line, end_line = end_line, start_line
+
+        # Get the specified lines
+        selected_lines = lines[start_line - 1:end_line]
+
+        # Calculate padding for line numbers based on the highest line number
+        padding = len(str(end_line))
+
+        # Add line numbers
+        numbered_lines = []
+        for i, line in enumerate(selected_lines, start=start_line):
+            numbered_lines.append(f"{i:{padding}d} │ {line}")
+
+        return "\n".join(numbered_lines)
 
 
     @commands.group()
@@ -271,55 +327,58 @@ class GitHubLookup(commands.Cog):
 
         repo = gh_data["repo"]
 
-        # Look for file references [filename.cs]
+        # Look for file references [filename.cs] or [filename.cs:123] or [filename.cs:123-128]
         file_matches = re.findall(r'\[(.*?)]', message.content)
         for filename in file_matches:
-            if filename.startswith('#'):  # Skip PR references
+            if filename.startswith('#'):  # Skip PR/issue references
                 continue
 
             try:
-                async with message.channel.typing():  # Show typing indicator while searching
-                    matches = await self.find_matching_files(repo, filename)
+                async with message.channel.typing():
+                    # Extract line numbers if present
+                    file_path, start_line, end_line = self.extract_line_numbers(filename)
+                    matches = await self.find_matching_files(repo, file_path)
 
                 if not matches:
                     embed = discord.Embed(
                         title="❌ File Not Found",
-                        description=f"Could not find file '{filename}' in the repository.",
+                        description=f"Could not find file '{file_path}' in the repository.",
                         color=discord.Color.red()
                     )
                     await message.channel.send(embed=embed)
                     continue
 
-                if len(matches) > 1 and not '/' in filename:
-                    # Multiple matches found, show paths
+                if len(matches) > 1 and not '/' in file_path:
+                    # Multiple matches found, show paths with GitHub links
                     embed = discord.Embed(
                         title="Multiple Files Found",
                         description="Please specify the full path to one of these files:",
                         color=discord.Color.gold()
                     )
-                    for path, content in matches[:10]:  # Limit to 10 results
+
+                    if len(matches) > 10:
+                        embed.description += f"\n\nShowing 10 of {len(matches)} matches"
+
+                    for path, content in matches[:10]:
                         embed.add_field(
                             name=path,
                             value=f"[View on GitHub]({content.html_url})",
                             inline=False
                         )
-                    if len(matches) > 10:
-                        embed.description += f"\n\nShowing 10 of {len(matches)} matches"
+
                     await message.channel.send(embed=embed)
                     continue
 
                 # Get the matching file
-                if '/' in filename:
-                    # If path specified, find exact match
-                    match = next((m for m in matches if m[0] == filename), None)
+                if '/' in file_path:
+                    match = next((m for m in matches if m[0] == file_path), None)
                 else:
-                    # If no path specified and only one match, use it
                     match = matches[0] if len(matches) == 1 else None
 
                 if not match:
                     embed = discord.Embed(
                         title="❌ File Not Found",
-                        description=f"Could not find exact file '{filename}' in the repository.",
+                        description=f"Could not find exact file '{file_path}' in the repository.",
                         color=discord.Color.red()
                     )
                     await message.channel.send(embed=embed)
@@ -331,19 +390,30 @@ class GitHubLookup(commands.Cog):
                     lambda: content.decoded_content.decode()
                 )
 
-                # Truncate content if too long
                 if len(file_content) > 2000:
-                    file_content = file_content[:1900] + "\n\n... (content truncated)"
+                    # If content is too long, only show first ~1900 characters with line numbers
+                    truncated_content = self.format_line_numbers(file_content[:1900], 1)
+                    file_content = f"{truncated_content}\n\n... (content truncated)"
+                else:
+                    file_content = self.format_line_numbers(file_content, start_line, end_line)
+
+                # Prepare title and GitHub URL
+                if start_line is not None:
+                    line_range = f" (lines {start_line}-{end_line})" if end_line and end_line != start_line else f" (line {start_line})"
+                    github_url = self.get_line_range_url(content.html_url, start_line, end_line)
+                else:
+                    line_range = ""
+                    github_url = content.html_url
 
                 embed = discord.Embed(
-                    title=f"📄 {path}",
+                    title=f"📄 {path}{line_range}",
                     description=box(file_content, lang=path.split('.')[-1]),
                     color=discord.Color.blue(),
                     timestamp=datetime.utcnow()
                 )
                 embed.add_field(
                     name="View on GitHub",
-                    value=f"[View full file]({content.html_url})",
+                    value=f"[View file]({github_url})",
                     inline=False
                 )
                 await message.channel.send(embed=embed)
