@@ -1,7 +1,7 @@
 import discord
 import re
 import asyncio
-from typing import List, Tuple, Union, Any
+from typing import List, Tuple, Union, Any, Optional
 from github import Github, Auth
 from github.GithubException import GithubException
 from github.ContentFile import ContentFile
@@ -10,7 +10,6 @@ from redbot.core import commands, Config, checks
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import box
 from discord.ui import Modal, TextInput
-
 
 class GitHubSetupModal(Modal, title='GitHub Integration Setup'):
     token = TextInput(
@@ -111,7 +110,7 @@ class GitHubLookup(commands.Cog):
         return discord.Color.green()
 
     @staticmethod
-    def extract_line_numbers(filename: str) -> Union[Tuple[Union[str, Any], int, int], Tuple[str, None, None]]:
+    def extract_line_numbers(filename: str) -> Tuple[str, Optional[int], Optional[int]]:
         """Extract line numbers from filename if present."""
         match = re.match(r'(.*?):(\d+)(?:-(\d+))?$', filename)
         if match:
@@ -129,40 +128,83 @@ class GitHubLookup(commands.Cog):
         return f"{url}#L{start_line}"
 
     @staticmethod
-    def format_line_numbers(content: str, start_line: int = None, end_line: int = None) -> str:
+    def format_line_numbers(content: str, start_line: Optional[int] = None, end_line: Optional[int] = None, max_length: Optional[int] = None) -> str:
         """
         Format content with line numbers.
         If start_line and end_line are provided, only show that range.
         Otherwise, show all lines with numbers.
+        If max_length is provided, truncate while preserving the requested line range.
         """
         lines = content.splitlines()
-
+    
         # If no line range specified, show all lines
         if start_line is None:
             start_line = 1
             end_line = len(lines)
         elif end_line is None:
             end_line = start_line
-
+    
         # Validate line numbers
         start_line = max(1, start_line)
         end_line = min(len(lines), end_line)
         if start_line > end_line:
             start_line, end_line = end_line, start_line
-
-        # Get the specified lines
-        selected_lines = lines[start_line - 1:end_line]
-
-        # Calculate padding for line numbers based on the highest line number
+    
+        # Calculate padding for line numbers
         padding = len(str(end_line))
-
-        # Add line numbers
-        numbered_lines = []
-        for i, line in enumerate(selected_lines, start=start_line):
-            numbered_lines.append(f"{i:{padding}d} │ {line}")
-
-        return "\n".join(numbered_lines)
-
+    
+        # If we have a max length and specific lines requested, prioritize those lines
+        if max_length is not None and start_line is not None:
+            # Get the specified range first
+            selected_lines = lines[start_line - 1:end_line]
+    
+            # Add context before and after if space permits
+            remaining_lines = max_length - sum(len(line) for line in selected_lines)
+            context_lines = 3  # Number of context lines to show before and after
+    
+            if remaining_lines > 0:
+                # Add lines before
+                before_start = max(0, start_line - 1 - context_lines)
+                before_lines = lines[before_start:start_line - 1]
+    
+                # Add lines after
+                after_end = min(len(lines), end_line + context_lines)
+                after_lines = lines[end_line:after_end]
+    
+                selected_lines = before_lines + selected_lines + after_lines
+                start_line = before_start + 1
+    
+            # Create the numbered lines
+            numbered_lines = []
+            current_line = start_line
+            output = ""
+    
+            for line in selected_lines:
+                numbered_line = f"{current_line:{padding}d} │ {line}\n"
+                if len(output) + len(numbered_line) > max_length:
+                    break
+                output += numbered_line
+                numbered_lines.append(numbered_line.rstrip())
+                current_line += 1
+    
+            return "\n".join(numbered_lines)
+        else:
+            # Get all specified lines
+            selected_lines = lines[start_line - 1:end_line]
+    
+            # Add line numbers
+            numbered_lines = [
+                f"{i:{padding}d} │ {line}"
+                for i, line in enumerate(selected_lines, start=start_line)
+            ]
+    
+            result = "\n".join(numbered_lines)
+    
+            # Truncate if needed
+            if max_length and len(result) > max_length:
+                return result[:max_length - 4] + "...\n"
+    
+            return result
 
     @commands.group()
     @checks.admin()
@@ -390,21 +432,33 @@ class GitHubLookup(commands.Cog):
                     lambda: content.decoded_content.decode()
                 )
 
-                if len(file_content) > 2000:
-                    # If content is too long, only show first ~1900 characters with line numbers
-                    truncated_content = self.format_line_numbers(file_content[:1900], 1)
-                    file_content = f"{truncated_content}\n\n... (content truncated)"
-                else:
-                    file_content = self.format_line_numbers(file_content, start_line, end_line)
-
-                # Prepare title and GitHub URL
+                max_content_length = 1900  # Leave room for Discord's formatting
+                
                 if start_line is not None:
+                    # If specific lines requested, prioritize those
+                    file_content = self.format_line_numbers(
+                        file_content,
+                        start_line,
+                        end_line,
+                        max_length=max_content_length
+                    )
                     line_range = f" (lines {start_line}-{end_line})" if end_line and end_line != start_line else f" (line {start_line})"
                     github_url = self.get_line_range_url(content.html_url, start_line, end_line)
                 else:
+                    # Otherwise show beginning of file with line numbers
+                    file_content = self.format_line_numbers(
+                        file_content,
+                        max_length=max_content_length
+                    )
                     line_range = ""
                     github_url = content.html_url
-
+                
+                # Check if content was truncated
+                original_lines_count = len(content.decoded_content.decode().splitlines())
+                shown_lines_count = len(file_content.splitlines())
+                if shown_lines_count < original_lines_count:
+                    file_content += f"\n... (showing {shown_lines_count} of {original_lines_count} lines)"
+                
                 embed = discord.Embed(
                     title=f"📄 {path}{line_range}",
                     description=box(file_content, lang=path.split('.')[-1]),
