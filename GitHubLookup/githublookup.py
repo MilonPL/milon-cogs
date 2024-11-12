@@ -83,7 +83,7 @@ class GitHubLookup(commands.Cog):
             instance["client"].close()
         self.gh_instances.clear()
 
-    def strip_html_comments(text: str) -> str:
+    def strip_html_comments(self, text: str) -> str:
         """Remove HTML comments from text."""
         if not text:
             return ""
